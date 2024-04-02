@@ -4,4 +4,4 @@ This is a simple Minesweeper game implemented in Python using the PyQt framework
 
 ## Installation
 
-Using pyinstaller, i have created a standalone executable for Windows & Linux. You can download it from the [releases](releases/latest) page.
+Using pyinstaller, i have created a standalone executable for Windows & Linux. You can download it from the [releases](https://github.com/zWolfrost/zweeper/releases/latest) page.
