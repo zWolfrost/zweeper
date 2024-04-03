@@ -1,52 +1,73 @@
 import random
 
+
 class Minefield:
-	def __init__(self, rows, cols, mines):
+	def __init__(self, rows, cols, mines, seed=None):
 		self.rows = rows
 		self.cols = cols
 		self.mines = mines
+		self.seed = seed or generateSeed(int(self.rows*self.cols/5))
+		self.field = []
 
 		# Initialize the field
-		self.field = [[{
-			"mines": 0,
-			"isMine": i*cols+j < mines,
-			"isOpen": False,
-			"isFlag": False,
-			"row": i,
-			"col": j,
-			"pos": (i, j)
-		} for j in range(cols)] for i in range(rows)]
+		for i in range(rows):
+			self.field.append([])
+			for j in range(cols):
+				self.field[i].append({
+					"mines": 0,
+					"isMine": False,
+					"isOpen": False,
+					"isFlag": False
+				})
 
-		# Fisher-Yates shuffle algorithm
-		for i in range(rows*cols-1, 0, -1):
-			j = random.randint(0, i)
-			row1, col1 = self.indexToPosition(i)
-			row2, col2 = self.indexToPosition(j)
-			self.field[row1][col1], self.field[row2][col2] = self.field[row2][col2], self.field[row1][col1]
+		# Randomize the mines
+		isMineList = [True]*mines + [False]*(rows*cols-mines)
+		random.seed(self.seed)
+		random.shuffle(isMineList)
 
 		# Calculate the number of mines around each cell
 		for i in range(rows):
 			for j in range(cols):
+				index = i*cols+j
 				self.field[i][j]["row"] = i
 				self.field[i][j]["col"] = j
 				self.field[i][j]["pos"] = (i, j)
+				self.field[i][j]["index"] = index
 
+				if (isMineList[index]):
+					self.field[i][j]["isMine"] = True
+					for cell in self.getNearbyCells(i, j, True):
+						cell["mines"] += 1
+
+		# Create a flat list of cells
+		self.flat = []
+		for row in self.field:
+			self.flat.extend(row)
+
+
+
+	def initialize(self):
+		self.__init__(self.rows, self.cols, self.mines)
+
+	def restore(self):
+		for row in self.field:
+			for cell in row:
+				cell["isOpen"] = False
+				cell["isFlag"] = False
+
+	def recountMines(self):
+		for cell in self.flat:
+			cell["mines"] = 0
+
+		for i in range(self.rows):
+			for j in range(self.cols):
 				if (self.field[i][j]["isMine"]):
 					for cell in self.getNearbyCells(i, j, True):
 						cell["mines"] += 1
 
 
 
-	def concatenate(self):
-		flat = []
-		for row in self.field:
-			flat.extend(row)
-		return flat
-
-
-
 	def open(self, row, col, firstMoveCheck=True, nearbyOpening=False, nearbyFlagging=False, checkIsActive=False):
-		flat = self.concatenate()
 		index = self.positionToIndex(row, col)
 		updatedCells = []
 
@@ -58,18 +79,17 @@ class Minefield:
 
 			for cell in self.getEmptyZone(row, col):
 				if (not cell["isOpen"]):
-					if (not checkIsActive):
-						cell["isOpen"] = True
+					cell["isOpen"] = True
 					updatedCells.append(cell)
 
 
-		if (not flat[index]["isOpen"]):
-			if (flat[index]["isMine"] and firstMoveCheck):
-				if (checkIsActive): return True
+		if (not self.flat[index]["isOpen"]):
+			if (checkIsActive): return True
+			if (self.flat[index]["isMine"] and firstMoveCheck):
 				self.moveMineToCorner(row, col)
 			openEmptyZone(row, col)
 
-		elif (flat[index]["mines"] != 0):
+		elif (self.flat[index]["mines"] != 0):
 			if (nearbyOpening or nearbyFlagging):
 				nearbyClosedCellsCount = 0
 				nearbyFlaggedCellsCount = 0
@@ -84,20 +104,208 @@ class Minefield:
 							nearbyUnflaggedCells.append(cell)
 
 				if (nearbyOpening):
-					if (flat[index]["mines"] == nearbyFlaggedCellsCount):
+					if (self.flat[index]["mines"] == nearbyFlaggedCellsCount):
+						if (checkIsActive): return True
 						for unflaggedCell in nearbyUnflaggedCells:
 							openEmptyZone(*unflaggedCell["pos"])
 				if (nearbyFlagging):
-					if (flat[index]["mines"] == nearbyClosedCellsCount):
+					if (self.flat[index]["mines"] == nearbyClosedCellsCount):
+						if (checkIsActive): return True
 						for unflaggedCell in nearbyUnflaggedCells:
-							if (checkIsActive): return True
 							unflaggedCell["isFlag"] = True
 							updatedCells.append(unflaggedCell)
 
 		if (checkIsActive):
-			return len(updatedCells) > 0
+			return False
 
 		return updatedCells
+
+	def isSolvableFrom(self, row, col, restore=True, firstMoveCheck=True):
+		firstCell = self.field[row][col]
+
+		if (firstCell["isMine"]):
+			if (firstMoveCheck and self.isNew()):
+				self.moveMineToCorner(row, col)
+			else:
+				return False
+
+		if (firstCell["mines"] == 0):
+			firstCell["isOpen"] = True
+		else:
+			return False
+
+
+		importantIndexes = [cell["index"] for cell in self.flat if cell["isOpen"]]
+
+		updates = True
+
+		while (updates):
+			updates = False
+
+			allLinkedGroups = []
+
+			def filterImportantIndexes(index):
+				for nearbyCell in self.getNearbyCells(*self.flat[index]["pos"]):
+					if (not nearbyCell["isOpen"] and not nearbyCell["isFlag"]):
+						return True
+
+				return False
+
+			importantIndexes = list(filter(filterImportantIndexes, importantIndexes))
+
+			# 1st try: open cells using nearby mines and flags
+			for i in importantIndexes:
+				if (self.flat[i]["mines"] == 0):
+					for emptyCell in self.getEmptyZone(*self.flat[i]["pos"]):
+						if (not emptyCell["isOpen"]):
+							emptyCell["isOpen"] = True
+							importantIndexes.append(emptyCell["index"])
+							updates = True
+				else:
+					nearbyClosedCellsCount = 0
+					nearbyFlaggedCellsCount = 0
+					nearbyUnflaggedIndexes = [[], 0]
+
+					for nearbyCell in self.getNearbyCells(*self.flat[i]["pos"]):
+						if (not nearbyCell["isOpen"]):
+							nearbyClosedCellsCount += 1
+							if (nearbyCell["isFlag"]):
+								nearbyFlaggedCellsCount += 1
+							else:
+								nearbyUnflaggedIndexes[0].append(nearbyCell["index"])
+
+					if (len(nearbyUnflaggedIndexes[0]) > 0):
+						# all nearby unflagged cells are safe -> open them
+						if (self.flat[i]["mines"] == nearbyFlaggedCellsCount):
+							for index in nearbyUnflaggedIndexes[0]:
+								self.flat[index]["isOpen"] = True
+								importantIndexes.append(index)
+							updates = True
+
+						# all nearby unflagged cells are mines -> flag them
+						if (self.flat[i]["mines"] == nearbyClosedCellsCount):
+							for index in nearbyUnflaggedIndexes[0]:
+								self.flat[index]["isFlag"] = True
+							updates = True
+
+						# all nearby unflagged cells have SOME mines -> link them
+						if (self.flat[i]["mines"] > nearbyFlaggedCellsCount):
+							if (not nearbyUnflaggedIndexes in allLinkedGroups):
+								nearbyUnflaggedIndexes[1] = self.flat[i]["mines"] - nearbyFlaggedCellsCount
+								allLinkedGroups.append(nearbyUnflaggedIndexes)
+
+			# 2nd try: link groups of cells
+			if (not updates):
+				shiftUpdates = True
+
+				# adding & shifting linked groups
+				while (shiftUpdates):
+					shiftUpdates = False
+
+					for i in importantIndexes:
+						linkedGroupsSum = [[], 0]
+						nearbyClosedIndexes = []
+						nearbyFlaggedCellsCount = 0
+
+						for nearbyCell in self.getNearbyCells(*self.flat[i]["pos"]):
+							if (nearbyCell["isFlag"]):
+								nearbyFlaggedCellsCount += 1
+							elif (not nearbyCell["isOpen"]):
+								nearbyClosedIndexes.append(nearbyCell["index"])
+
+						for linkedGroup in allLinkedGroups:
+							if (isSublist(nearbyClosedIndexes, linkedGroup[0]) and len(nearbyClosedIndexes) != len(linkedGroup[0])):
+								shiftLinkedGroup = [
+									subtractLists(nearbyClosedIndexes, linkedGroup[0]), # shifting
+									self.flat[i]["mines"] - linkedGroup[1] - nearbyFlaggedCellsCount
+								]
+
+								if (len(shiftLinkedGroup[0]) > 0 and shiftLinkedGroup[1] > 0 and not shiftLinkedGroup in allLinkedGroups):
+									allLinkedGroups.append(shiftLinkedGroup)
+									shiftUpdates = True
+
+								if (not hasDuplicates(linkedGroupsSum[0], linkedGroup[0])): # adding
+									linkedGroupsSum[1] += linkedGroup[1]
+									linkedGroupsSum[0].extend(linkedGroup[0])
+
+						if (len(linkedGroupsSum[0]) > 0 and not linkedGroupsSum in allLinkedGroups):
+							allLinkedGroups.append(linkedGroupsSum)
+							shiftUpdates = True
+
+				# open cells in linked groups
+				for i in importantIndexes:
+					nearbyIndexes = [cell["index"] for cell in self.getNearbyCells(*self.flat[i]["pos"])]
+
+					for linkedGroup in allLinkedGroups:
+						if (hasDuplicates(linkedGroup[0], nearbyIndexes)):
+							nearbyFlaggedCellsCount = 0
+							nearbyUnkownIndexes = []
+
+							for index in nearbyIndexes:
+								if (self.flat[index]["isFlag"]):
+									nearbyFlaggedCellsCount += 1
+								elif (not self.flat[index]["isOpen"] and not index in linkedGroup[0]):
+									nearbyUnkownIndexes.append(index)
+
+							if (len(nearbyUnkownIndexes) > 0):
+								linkedGroupUncontainedCellsCount = len(subtractLists(linkedGroup[0], nearbyIndexes))
+
+								# all unknown cells are mines -> flag them
+								if (self.flat[i]["mines"] == nearbyFlaggedCellsCount + linkedGroup[1] + len(nearbyUnkownIndexes)):
+									for index in nearbyUnkownIndexes:
+										self.flat[index]["isFlag"] = True
+									updates = True
+								# all unknown cells are clear > open them
+								elif (self.flat[i]["mines"] == nearbyFlaggedCellsCount + linkedGroup[1] - linkedGroupUncontainedCellsCount and not updates):
+									for index in nearbyUnkownIndexes:
+										if (not self.flat[index]["isFlag"]):
+											self.flat[index]["isOpen"] = True
+											importantIndexes.append(index)
+											updates = True
+
+			# 3rd try: open cells using remaining flags count
+			if (not updates):
+				flagsCount = 0
+				minesCount = 0
+
+				for cell in self.flat:
+					if (cell["isFlag"]): flagsCount += 1
+					if (cell["isMine"]): minesCount += 1
+
+				if (flagsCount == minesCount):
+					for cell in self.flat:
+						if (not cell["isOpen"] and not cell["isFlag"]):
+							cell["isOpen"] = True
+							importantIndexes.append(cell["index"])
+				else:
+					for linkedGroup in allLinkedGroups:
+						linkedGroup[0].sort()
+					allLinkedGroups.sort()
+
+					linkedGroupsSum = [[], 0]
+
+					for linkedGroup in allLinkedGroups:
+						if (not hasDuplicates(linkedGroupsSum[0], linkedGroup[0])):
+							linkedGroupsSum[1] += linkedGroup[1]
+							linkedGroupsSum[0].extend(linkedGroup[0])
+
+					allLinkedGroups.append(linkedGroupsSum)
+
+					for linkedGroup in allLinkedGroups:
+						if linkedGroup[1] == minesCount - flagsCount:
+							for cell in self.flat:
+								if (not cell["isOpen"] and not cell["isFlag"] and not cell["index"] in linkedGroup[0]):
+									cell["isOpen"] = True
+									importantIndexes.append(cell["index"])
+									updates = True
+
+
+		if (restore):
+			self.restore()
+
+		isSolvable = len(importantIndexes) == 0
+
+		return isSolvable
 
 	def moveMineToCorner(self, row, col):
 		if (self.field[row][col]["isMine"]):
@@ -159,6 +367,9 @@ class Minefield:
 
 		return [self.field[cell[0]][cell[1]] for cell in visited]
 
+	def cell(self, row, col):
+		return self.field[row][col]
+
 
 
 	def isNew(self):
@@ -205,18 +416,44 @@ class Minefield:
 
 
 
-	def visualize(self, uncover=False, log=True):
-		EMPTY = "0"
-		CLOSED = "?"
-		FLAG = "F"
-		MINE = "X"
+	def visualize(self, unicode=False, color=False, highlight=False, uncover=False, log=True):
+		EMPTY = "·" if unicode else "0"
+		CLOSED = "■" if unicode else "?"
+		FLAG = "►" if unicode else "F"
+		MINE = "*" if unicode else "X"
+
+		COLORS = {
+			"END": "\x1b[0m",
+
+			"ROW": {
+				"blackbg": "\x1b[40m",
+				"bright":  "\x1b[1m",
+			},
+
+			"COL": {
+				"redfg":     "\x1b[31m",
+				"greenfg":   "\x1b[32m",
+				"yellowfg":  "\x1b[33m",
+				"bluefg":    "\x1b[34m",
+				"magentafg": "\x1b[35m",
+				"cyanfg":    "\x1b[36m",
+			},
+
+			"HIGHLIGHT": "\x1b[7m"
+		}
+		ROW_COLORS = list(COLORS["ROW"].values())
+		COL_COLORS = list(COLORS["COL"].values())
+
+		def getCycleColor(colors, cycle):
+			return colors[cycle % len(colors)]
 
 		text = ""
 
-		for i in range(self.rows):
-			for j in range(self.cols):
+		for row in self.field:
+			if (color): text += getCycleColor(ROW_COLORS, row[0]["row"])
+
+			for cell in row:
 				char = ""
-				cell = self.field[i][j]
 
 				if (not cell["isOpen"] and not uncover):
 					if (cell["isFlag"]): char += FLAG
@@ -225,9 +462,17 @@ class Minefield:
 				elif (cell["mines"] == 0): char += EMPTY
 				else: char += str(cell["mines"])
 
-				text += char
+				if (color): text += getCycleColor(ROW_COLORS, row[0]["row"]) + getCycleColor(COL_COLORS, cell["col"])
 
-				if (j < self.cols-1): text += " "
+				if (highlight and cell["pos"] in highlight):
+					text += COLORS["HIGHLIGHT"] + char + COLORS["END"]
+					if (color): text += getCycleColor(ROW_COLORS, row[0]["row"]) + getCycleColor(COL_COLORS, cell["col"])
+				else:
+					text += char
+
+				if (cell["col"] != self.cols-1): text += " "
+
+				if (color): text += COLORS["END"]
 			text += "\n"
 
 		if (log): print(text)
@@ -242,3 +487,20 @@ class Minefield:
 			for cell in row:
 				if (cell["isFlag"]): flagCount += 1
 		return flagCount
+
+
+def subtractLists(list1, list2):
+	return [item for item in list1 if item not in list2]
+
+def hasDuplicates(list1, list2):
+	return any(item in list1 for item in list2)
+
+def isSublist(list, sublist):
+	return all(item in list for item in sublist)
+
+def generateSeed(length):
+	CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	seed = ""
+	for _ in range(length):
+		seed += random.choice(CHARS)
+	return seed

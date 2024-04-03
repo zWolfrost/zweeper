@@ -1,4 +1,4 @@
-#! ./env/bin/python
+#! ./venv/bin/python
 
 import sys, os
 from PySide6 import QtCore, QtWidgets, QtGui
@@ -10,7 +10,21 @@ from zweeper_engine import Minefield
 import timeit
 
 
+
 WORKING_DIR = getattr(sys, '_MEIPASS', '.')
+
+options = {
+	"rows": 16,
+	"cols": 16,
+	"mines": 40,
+	"autoMode": False,
+	"noGuessMode": False,
+
+	"seed": None,
+
+	"windowToScreenSizeRatio": 0.8,
+	"cellSizeInterval": (20, 50),
+}
 
 
 
@@ -24,32 +38,36 @@ def minmax(num, min, max):
 
 
 class zweeper(QtWidgets.QWidget):
-	def __init__(self, rows, cols, mines):
+	def __init__(self):
 		super().__init__()
 
-		self.initUI(rows, cols, mines)
+		self.initUI()
 		self.show()
 
-	def initUI(self, rows, cols, mines):
-		self.minefield = Minefield(rows, cols, mines)
+	def initUI(self):
+		self.minefield = Minefield(options["rows"], options["cols"], options["mines"], seed=options["seed"])
 
-		cell_size = 1000 // max(rows, cols)
-		cell_size = minmax(cell_size, 20, 50)
-		self.setGeometry(0, 0, cell_size*cols, cell_size*rows)
+		screen_width = QScreen.availableGeometry(QApplication.primaryScreen()).width()
+		screen_height = QScreen.availableGeometry(QApplication.primaryScreen()).height()
+		max_window_size = min(screen_width, screen_height) * options["windowToScreenSizeRatio"]
 
-		centerWindow(self)
+		self.cell_size = minmax(int(max_window_size / max(self.minefield.rows, self.minefield.cols)), *options["cellSizeInterval"])
 
-		self.setWindowTitle(f"zweeper - {self.minefield.mines} flags left")
+		self.setFixedSize(self.cell_size*self.minefield.cols, self.cell_size*self.minefield.rows)
+		self.updateTitle()
 
 		self.layout = QtWidgets.QGridLayout()
 		self.layout.setSpacing(0)
 		self.layout.setContentsMargins(0, 0, 0, 0)
+
+		centerWindow(self)
 
 		for row in range(self.minefield.rows):
 			for col in range(self.minefield.cols):
 				cell = QtWidgets.QLabel()
 				cell.setMinimumSize(20, 20)
 				cell.setAlignment(QtCore.Qt.AlignCenter)
+				cell.setFixedSize(self.cell_size, self.cell_size)
 
 				cell.mousePressEvent = lambda event, row=row, col=col: self.cellPress(event, row, col)
 				cell.mouseReleaseEvent = lambda event, row=row, col=col: self.cellRelease(event, row, col)
@@ -61,8 +79,6 @@ class zweeper(QtWidgets.QWidget):
 
 		self.setLayout(self.layout)
 
-		print(WORKING_DIR)
-
 		id = QFontDatabase.addApplicationFont(os.path.join(WORKING_DIR, "minesweeper.otf"))
 		families = QFontDatabase.applicationFontFamilies(id)
 		self.minesweeperFontID = families[0]
@@ -72,8 +88,10 @@ class zweeper(QtWidgets.QWidget):
 		self.updateUI()
 
 
+
 	def updateUI(self, zone=None, pressed=None):
 		scale = (min(self.width()/self.minefield.cols, self.height()/self.minefield.rows))/30
+		game_lost = self.minefield.isLost()
 
 		if (pressed):
 			pressed.setStyleSheet(
@@ -86,14 +104,14 @@ class zweeper(QtWidgets.QWidget):
 		elif (zone):
 			for row, col in zone:
 				cell = self.layout.itemAtPosition(row, col).widget()
-				self.displayCell(cell, self.minefield.field[row][col], scale)
+				self.displayCell(cell, self.minefield.field[row][col], scale, game_lost)
 		else:
 			for row in range(self.minefield.rows):
 				for col in range(self.minefield.cols):
 					cell = self.layout.itemAtPosition(row, col).widget()
-					self.displayCell(cell, self.minefield.field[row][col], scale)
+					self.displayCell(cell, self.minefield.field[row][col], scale, game_lost)
 
-	def displayCell(self, cell: QtWidgets.QLabel, cellData: dict, scale=1):
+	def displayCell(self, cell: QtWidgets.QLabel, cell_data: dict, scale=1, game_lost=False):
 		text = ""
 		background_color = ""
 		color = ""
@@ -101,18 +119,20 @@ class zweeper(QtWidgets.QWidget):
 		border_topleft = ""
 		border_bottomright = ""
 
-		if (cellData["isOpen"]):
+		font_size = 12
+
+		if (cell_data["isOpen"]):
 			border_topleft = f"{str(0*scale)}px solid gray; padding-top: {str(4*scale)}px; padding-left: {str(4*scale)}px"
 			border_bottomright = f"{str(2*scale)}px solid gray; padding-bottom: {str(2*scale)}px; padding-right: {str(2*scale)}px"
-
-			if (cellData["isMine"]):
-				text = "X"
-				background_color = "crimson"
+			if (cell_data["isMine"]):
+				text = "*"
+				background_color = "red"
 				color = "black"
 			else:
+				font_size = 14
 				background_color = "lightgray"
 
-				match cellData["mines"]:
+				match cell_data["mines"]:
 					case 1:
 						text = "1"
 						color = "blue"
@@ -141,10 +161,14 @@ class zweeper(QtWidgets.QWidget):
 			border_topleft = str(4*scale) + "px solid whitesmoke"
 			border_bottomright = str(4*scale) + "px solid gray"
 
-			if (cellData["isFlag"]):
-				text = "F"
-				background_color = "darkgray"
+			if (cell_data["isFlag"]):
+				text = "`"
+				background_color = "lightgray"
 				color = "crimson"
+			elif (cell_data["isMine"] and game_lost):
+				text = "*"
+				background_color = "lightgray"
+				color = "black"
 			else:
 				background_color = "lightgray"
 				color = "black"
@@ -159,26 +183,33 @@ class zweeper(QtWidgets.QWidget):
 			f"border-bottom: {border_bottomright};"
 		)
 
-		cell.setFont(QtGui.QFont(self.minesweeperFontID, 11*scale, QtGui.QFont.Bold))
+		cell.setFont(QtGui.QFont(self.minesweeperFontID, font_size*scale))
 
 	def updateCursor(self, row, col):
 		cell = self.layout.itemAtPosition(row, col).widget()
 		cellData = self.minefield.field[row][col]
 
-		if (self.minefield.open(*cellData["pos"], nearbyOpening=True, nearbyFlagging=True, checkIsActive=True)):
+		if (self.minefield.open(*cellData["pos"], nearbyOpening=options["autoMode"], nearbyFlagging=options["autoMode"], checkIsActive=True)):
 			cell.setCursor(QtCore.Qt.PointingHandCursor)
 		else:
 			cell.setCursor(QtCore.Qt.ArrowCursor)
 
+	def updateTitle(self):
+		self.setWindowTitle(f"zweeper - {self.minefield.mines - self.minefield.flags} flags left")
+
 
 	def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
 		self.updateUI()
-		pass
 
 	def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
 		if event.key() == QtCore.Qt.Key_R:
-			self.minefield = Minefield(self.minefield.rows, self.minefield.cols, self.minefield.mines)
+			self.minefield.initialize()
+			#while (self.minefield.field[0][0]["mines"] != 0 or self.minefield.isSolvableFrom(0, 0, restore=False)):
+			#	self.minefield.initialize()
 			self.updateUI()
+			self.updateTitle()
+			#print(self.minefield.seed)
+
 
 
 	def cellPress(self, event: QtGui.QMouseEvent, row: int, col: int):
@@ -193,13 +224,20 @@ class zweeper(QtWidgets.QWidget):
 		cellData = self.minefield.field[row][col]
 
 		if (event.button() == QtCore.Qt.LeftButton and not cellData["isFlag"]):
-			zone = self.minefield.open(*cellData["pos"], nearbyOpening=True, nearbyFlagging=True)
+			if (self.minefield.isNew() and options["noGuessMode"]):
+				while (not self.minefield.isSolvableFrom(*cellData["pos"])):
+					self.minefield.initialize()
+				self.updateUI()
+
+			zone = self.minefield.open(*cellData["pos"], nearbyOpening=options["autoMode"], nearbyFlagging=options["autoMode"])
 			self.updateUI(zone=[cell["pos"] for cell in zone])
 
 			if (self.minefield.isOver()):
+				self.updateUI(zone=[cell["pos"] for cell in self.minefield.flat if cell["isMine"] and not cell["isFlag"]])
 				self.onGameOver()
-				self.minefield = Minefield(self.minefield.rows, self.minefield.cols, self.minefield.mines)
+				self.minefield.initialize()
 				self.updateUI()
+				self.updateTitle()
 
 		elif (event.button() == QtCore.Qt.RightButton):
 			if (not cellData["isOpen"]):
@@ -209,7 +247,7 @@ class zweeper(QtWidgets.QWidget):
 					cellData["isFlag"] = True
 
 				self.updateUI(zone=[cellData["pos"]])
-				self.setWindowTitle(f"zweeper - {self.minefield.mines - self.minefield.flags} flags left")
+				self.updateTitle()
 
 		self.updateCursor(row, col)
 
@@ -218,6 +256,7 @@ class zweeper(QtWidgets.QWidget):
 			self.lastMousePos = (row, col)
 
 			self.updateCursor(row, col)
+
 
 
 	def onGameOver(self):
@@ -244,31 +283,62 @@ class zweeper_size_prompt(QtWidgets.QWidget):
 		self.show()
 
 	def initUI(self):
-		self.setFixedSize(300, 125)
+		self.setFixedSize(250, 250)
 		self.setWindowTitle("zweeper")
-
-		centerWindow(self)
 
 		self.layout = QtWidgets.QVBoxLayout()
 		self.layout.setSpacing(2)
-		self.layout.setContentsMargins(0, 0, 0, 0)
+		self.setStyleSheet("font-size: 15px;")
+
+		centerWindow(self)
 
 		self.difficultyLabel = QtWidgets.QLabel("")
-		self.difficultyLabel.setAlignment(QtCore.Qt.AlignCenter)
-		self.layout.addWidget(self.difficultyLabel)
-
-		self.infoLabel = QtWidgets.QLabel("")
-		self.infoLabel.setAlignment(QtCore.Qt.AlignCenter)
-		self.layout.addWidget(self.infoLabel)
+		self.layout.addWidget(self.difficultyLabel, 0, QtCore.Qt.AlignCenter)
 
 		self.difficulty = QtWidgets.QSlider(QtCore.Qt.Horizontal)
 		self.difficulty.setMinimum(1)
-		self.difficulty.setMaximum(3)
-		self.difficulty.setTickInterval(1)
+		self.difficulty.setMaximum(5)
 		self.difficulty.setValue(2)
-		self.difficulty.setTickPosition(QtWidgets.QSlider.TicksBelow)
 		self.difficulty.valueChanged.connect(self.difficultyChanged)
 		self.layout.addWidget(self.difficulty)
+
+		self.rowsLine = QtWidgets.QHBoxLayout()
+		self.layout.addLayout(self.rowsLine)
+		self.rowsLabel = QtWidgets.QLabel("Rows:")
+		self.rowsLine.addWidget(self.rowsLabel)
+		self.rowsInput = QtWidgets.QSpinBox()
+		self.rowsInput.setRange(1, 50)
+		self.rowsInput.valueChanged.connect(lambda value: options.update({"rows": value}))
+		self.rowsInput.setFixedWidth(100)
+		self.rowsLine.addWidget(self.rowsInput)
+
+		self.colsLine = QtWidgets.QHBoxLayout()
+		self.layout.addLayout(self.colsLine)
+		self.colsLabel = QtWidgets.QLabel("Columns:")
+		self.colsLine.addWidget(self.colsLabel)
+		self.colsInput = QtWidgets.QSpinBox()
+		self.colsInput.setRange(1, 50)
+		self.colsInput.valueChanged.connect(lambda value: options.update({"cols": value}))
+		self.colsInput.setFixedWidth(100)
+		self.colsLine.addWidget(self.colsInput)
+
+		self.minesLine = QtWidgets.QHBoxLayout()
+		self.layout.addLayout(self.minesLine)
+		self.minesLabel = QtWidgets.QLabel("Mines:")
+		self.minesLine.addWidget(self.minesLabel)
+		self.minesInput = QtWidgets.QSpinBox()
+		self.minesInput.setRange(0, 2000)
+		self.minesInput.valueChanged.connect(lambda value: options.update({"mines": value}))
+		self.minesInput.setFixedWidth(100)
+		self.minesLine.addWidget(self.minesInput)
+
+		self.autoModeCheckbox = QtWidgets.QCheckBox("Auto mode")
+		self.autoModeCheckbox.stateChanged.connect(lambda state: options.update({"autoMode": state == 2}))
+		self.layout.addWidget(self.autoModeCheckbox)
+
+		self.noGuessModeCheckbox = QtWidgets.QCheckBox("No guess mode")
+		self.noGuessModeCheckbox.stateChanged.connect(lambda state: options.update({"noGuessMode": state == 2}))
+		self.layout.addWidget(self.noGuessModeCheckbox)
 
 		self.button = QtWidgets.QPushButton("Start")
 		self.button.clicked.connect(self.startGame)
@@ -279,21 +349,37 @@ class zweeper_size_prompt(QtWidgets.QWidget):
 		self.setLayout(self.layout)
 
 	def difficultyChanged(self):
+		self.rowsInput.setEnabled(False)
+		self.colsInput.setEnabled(False)
+		self.minesInput.setEnabled(False)
+
 		match self.difficulty.value():
 			case 1:
-				self.rows, self.cols, self.mines = 8, 8, 10
+				options["rows"], options["cols"], options["mines"] = 9, 9, 10
 				self.difficultyLabel.setText("Difficulty: Easy")
 			case 2:
-				self.rows, self.cols, self.mines = 16, 16, 40
+				options["rows"], options["cols"], options["mines"] = 16, 16, 40
 				self.difficultyLabel.setText("Difficulty: Normal")
 			case 3:
-				self.rows, self.cols, self.mines = 16, 30, 99
+				options["rows"], options["cols"], options["mines"] = 16, 30, 99
 				self.difficultyLabel.setText("Difficulty: Hard")
+			case 4:
+				options["rows"], options["cols"], options["mines"] = 30, 30, 200
+				self.difficultyLabel.setText("Difficulty: Extreme")
+			case 5:
+				options["rows"], options["cols"], options["mines"] = 16, 16, 40
+				self.difficultyLabel.setText("Difficulty: Custom")
+				self.rowsInput.setEnabled(True)
+				self.colsInput.setEnabled(True)
+				self.minesInput.setEnabled(True)
 
-		self.infoLabel.setText(f"Rows: {self.rows}, Cols: {self.cols}, Mines: {self.mines}")
+		self.rowsInput.setValue(options["rows"])
+		self.colsInput.setValue(options["cols"])
+		self.minesInput.setValue(options["mines"])
 
 	def startGame(self):
-		self.game = zweeper(self.rows, self.cols, self.mines)
+		options["mines"] = min(options["mines"], options["rows"]*options["cols"]-1)
+		self.game = zweeper()
 		self.close()
 
 

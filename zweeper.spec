@@ -3,7 +3,7 @@
 
 a = Analysis(
     ['zweeper.py'],
-    pathex=[],
+    pathex=['./venv/lib/python3.10/site-packages'],
     binaries=[],
     datas=[('./minesweeper.otf', '.')],
     hiddenimports=[],
