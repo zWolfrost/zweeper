@@ -1,4 +1,4 @@
-import random
+import random, json
 
 
 class Minefield:
@@ -307,6 +307,156 @@ class Minefield:
 
 		return isSolvable
 
+	def getHint(self):
+		if (self.isNew()):
+			return None
+
+		def filterImportantIndexes(index):
+			for nearbyCell in self.getNearbyCells(*self.flat[index]["pos"]):
+				if (not nearbyCell["isOpen"] and not nearbyCell["isFlag"]):
+					return True
+
+			return False
+
+		importantIndexes = [cell["index"] for cell in self.flat if cell["isOpen"]]
+		importantIndexes = list(filter(filterImportantIndexes, importantIndexes))
+
+		allLinkedGroups = []
+
+		# 1st try: open cells using nearby mines and flags
+		for i in importantIndexes:
+			if (self.flat[i]["mines"] == 0):
+				for emptyCell in self.getEmptyZone(*self.flat[i]["pos"]):
+					if (not emptyCell["isOpen"]):
+						return emptyCell
+			else:
+				nearbyClosedCellsCount = 0
+				nearbyFlaggedCellsCount = 0
+				nearbyUnflaggedIndexes = [[], 0]
+
+				for nearbyCell in self.getNearbyCells(*self.flat[i]["pos"]):
+					if (not nearbyCell["isOpen"]):
+						nearbyClosedCellsCount += 1
+						if (nearbyCell["isFlag"]):
+							nearbyFlaggedCellsCount += 1
+						else:
+							nearbyUnflaggedIndexes[0].append(nearbyCell["index"])
+
+				if (len(nearbyUnflaggedIndexes[0]) > 0):
+					# all nearby unflagged cells are safe -> open them
+					if (self.flat[i]["mines"] == nearbyFlaggedCellsCount):
+						for index in nearbyUnflaggedIndexes[0]:
+							return self.flat[index]
+
+					# all nearby unflagged cells are mines -> flag them
+					if (self.flat[i]["mines"] == nearbyClosedCellsCount):
+						for index in nearbyUnflaggedIndexes[0]:
+							return self.flat[index]
+
+					# all nearby unflagged cells have SOME mines -> link them
+					if (self.flat[i]["mines"] > nearbyFlaggedCellsCount):
+						if (not nearbyUnflaggedIndexes in allLinkedGroups):
+							nearbyUnflaggedIndexes[1] = self.flat[i]["mines"] - nearbyFlaggedCellsCount
+							allLinkedGroups.append(nearbyUnflaggedIndexes)
+
+		shiftUpdates = True
+
+		# adding & shifting linked groups
+		while (shiftUpdates):
+			shiftUpdates = False
+
+			for i in importantIndexes:
+				linkedGroupsSum = [[], 0]
+				nearbyClosedIndexes = []
+				nearbyFlaggedCellsCount = 0
+
+				for nearbyCell in self.getNearbyCells(*self.flat[i]["pos"]):
+					if (nearbyCell["isFlag"]):
+						nearbyFlaggedCellsCount += 1
+					elif (not nearbyCell["isOpen"]):
+						nearbyClosedIndexes.append(nearbyCell["index"])
+
+				for linkedGroup in allLinkedGroups:
+					if (isSublist(nearbyClosedIndexes, linkedGroup[0]) and len(nearbyClosedIndexes) != len(linkedGroup[0])):
+						shiftLinkedGroup = [
+							subtractLists(nearbyClosedIndexes, linkedGroup[0]), # shifting
+							self.flat[i]["mines"] - linkedGroup[1] - nearbyFlaggedCellsCount
+						]
+
+						if (len(shiftLinkedGroup[0]) > 0 and shiftLinkedGroup[1] > 0 and not shiftLinkedGroup in allLinkedGroups):
+							allLinkedGroups.append(shiftLinkedGroup)
+							shiftUpdates = True
+
+						if (not hasDuplicates(linkedGroupsSum[0], linkedGroup[0])): # adding
+							linkedGroupsSum[1] += linkedGroup[1]
+							linkedGroupsSum[0].extend(linkedGroup[0])
+
+				if (len(linkedGroupsSum[0]) > 0 and not linkedGroupsSum in allLinkedGroups):
+					allLinkedGroups.append(linkedGroupsSum)
+					shiftUpdates = True
+
+		# open cells in linked groups
+		for i in importantIndexes:
+			nearbyIndexes = [cell["index"] for cell in self.getNearbyCells(*self.flat[i]["pos"])]
+
+			for linkedGroup in allLinkedGroups:
+				if (hasDuplicates(linkedGroup[0], nearbyIndexes)):
+					nearbyFlaggedCellsCount = 0
+					nearbyUnkownIndexes = []
+
+					for index in nearbyIndexes:
+						if (self.flat[index]["isFlag"]):
+							nearbyFlaggedCellsCount += 1
+						elif (not self.flat[index]["isOpen"] and not index in linkedGroup[0]):
+							nearbyUnkownIndexes.append(index)
+
+					if (len(nearbyUnkownIndexes) > 0):
+						linkedGroupUncontainedCellsCount = len(subtractLists(linkedGroup[0], nearbyIndexes))
+
+						# all unknown cells are mines -> flag them
+						if (self.flat[i]["mines"] == nearbyFlaggedCellsCount + linkedGroup[1] + len(nearbyUnkownIndexes)):
+							for index in nearbyUnkownIndexes:
+								return self.flat[index]
+						# all unknown cells are clear > open them
+						elif (self.flat[i]["mines"] == nearbyFlaggedCellsCount + linkedGroup[1] - linkedGroupUncontainedCellsCount):
+							for index in nearbyUnkownIndexes:
+								if (not self.flat[index]["isFlag"]):
+									return self.flat[index]
+
+		# 3rd try: open cells using remaining flags count
+		flagsCount = 0
+		minesCount = 0
+
+		for cell in self.flat:
+			if (cell["isFlag"]): flagsCount += 1
+			if (cell["isMine"]): minesCount += 1
+
+		if (flagsCount == minesCount):
+			for cell in self.flat:
+				if (not cell["isOpen"] and not cell["isFlag"]):
+					return cell
+		else:
+			for linkedGroup in allLinkedGroups:
+				linkedGroup[0].sort()
+			allLinkedGroups.sort()
+
+			linkedGroupsSum = [[], 0]
+
+			for linkedGroup in allLinkedGroups:
+				if (not hasDuplicates(linkedGroupsSum[0], linkedGroup[0])):
+					linkedGroupsSum[1] += linkedGroup[1]
+					linkedGroupsSum[0].extend(linkedGroup[0])
+
+			allLinkedGroups.append(linkedGroupsSum)
+
+			for linkedGroup in allLinkedGroups:
+				if linkedGroup[1] == minesCount - flagsCount:
+					for cell in self.flat:
+						if (not cell["isOpen"] and not cell["isFlag"] and not cell["index"] in linkedGroup[0]):
+							return cell
+
+		return None
+
 	def moveMineToCorner(self, row, col):
 		if (self.field[row][col]["isMine"]):
 			for i in range(self.rows):
@@ -487,6 +637,40 @@ class Minefield:
 			for cell in row:
 				if (cell["isFlag"]): flagCount += 1
 		return flagCount
+
+
+
+	def save(self):
+		openCells = []
+		flagCells = []
+
+		for cell in self.flat:
+			if (cell["isOpen"]): openCells.append(cell["index"])
+			if (cell["isFlag"]): flagCells.append(cell["index"])
+
+		return json.dumps({
+			"rows": self.rows,
+			"cols": self.cols,
+			"mines": self.mines,
+			"open": openCells,
+			"flags": flagCells,
+			"seed": self.seed,
+		}, separators=(",", ":"))
+
+	@staticmethod
+	def load(data):
+		load = json.loads(data)
+
+		minefield = Minefield(load["rows"], load["cols"], load["mines"], load["seed"])
+
+		for i in load["open"]:
+			minefield.flat[i]["isOpen"] = True
+
+		for i in load["flags"]:
+			minefield.flat[i]["isFlag"] = True
+
+		return minefield
+
 
 
 def subtractLists(list1, list2):

@@ -7,8 +7,6 @@ from PySide6.QtGui import QFontDatabase, QScreen
 
 from zweeper_engine import Minefield
 
-import timeit
-
 
 
 WORKING_DIR = getattr(sys, '_MEIPASS', '.')
@@ -17,13 +15,13 @@ options = {
 	"rows": 16,
 	"cols": 16,
 	"mines": 40,
-	"autoMode": False,
-	"noGuessMode": False,
+	"autoMode": True,
+	"noGuessMode": True,
 
 	"seed": None,
 
 	"windowToScreenSizeRatio": 0.8,
-	"cellSizeInterval": (20, 50),
+	"cellSizeInterval": (20, 40),
 }
 
 
@@ -36,6 +34,13 @@ def centerWindow(window: QtWidgets.QWidget):
 def minmax(num, min, max):
 	return max if num > max else min if num < min else num
 
+def showMessageBox(title, text):
+	msg = QMessageBox()
+	msg.setWindowTitle(title)
+	msg.setText(text)
+	msg.exec()
+
+
 
 class zweeper(QtWidgets.QWidget):
 	def __init__(self):
@@ -47,11 +52,11 @@ class zweeper(QtWidgets.QWidget):
 	def initUI(self):
 		self.minefield = Minefield(options["rows"], options["cols"], options["mines"], seed=options["seed"])
 
-		screen_width = QScreen.availableGeometry(QApplication.primaryScreen()).width()
-		screen_height = QScreen.availableGeometry(QApplication.primaryScreen()).height()
-		max_window_size = min(screen_width, screen_height) * options["windowToScreenSizeRatio"]
+		max_window_width  = QScreen.availableGeometry(QApplication.primaryScreen()).width()  * options["windowToScreenSizeRatio"]
+		max_window_height = QScreen.availableGeometry(QApplication.primaryScreen()).height() * options["windowToScreenSizeRatio"]
 
-		self.cell_size = minmax(int(max_window_size / max(self.minefield.rows, self.minefield.cols)), *options["cellSizeInterval"])
+		self.cell_size = int(min(max_window_width/self.minefield.cols, max_window_height/self.minefield.rows))
+		self.cell_size = minmax(self.cell_size, *options["cellSizeInterval"])
 
 		self.setFixedSize(self.cell_size*self.minefield.cols, self.cell_size*self.minefield.rows)
 		self.updateTitle()
@@ -85,33 +90,48 @@ class zweeper(QtWidgets.QWidget):
 
 		self.lastMousePos = (-1, -1)
 
-		self.updateUI()
+		self.updateUI(True)
 
 
 
-	def updateUI(self, zone=None, pressed=None):
+	def updateUI(self, all=False, zone=[], pressed=[], highlight=[]):
 		scale = (min(self.width()/self.minefield.cols, self.height()/self.minefield.rows))/30
 		game_lost = self.minefield.isLost()
 
-		if (pressed):
-			pressed.setStyleSheet(
-				"background-color: lightgray;"
-				f"border-top: {str(4*scale)}px solid gray;"
-				f"border-left: {str(4*scale)}px solid gray;"
-				f"border-right: {str(2*scale)}px solid whitesmoke;"
-				f"border-bottom: {str(2*scale)}px solid whitesmoke;"
-			)
-		elif (zone):
-			for row, col in zone:
-				cell = self.layout.itemAtPosition(row, col).widget()
-				self.displayCell(cell, self.minefield.field[row][col], scale, game_lost)
-		else:
-			for row in range(self.minefield.rows):
-				for col in range(self.minefield.cols):
-					cell = self.layout.itemAtPosition(row, col).widget()
-					self.displayCell(cell, self.minefield.field[row][col], scale, game_lost)
+		if (all):
+			zone = [(row, col) for row in range(self.minefield.rows) for col in range(self.minefield.cols)]
+		elif (hasattr(self, "highlighted_cells") and self.highlighted_cells):
+			zone.extend(self.highlighted_cells)
+			self.highlighted_cells = []
 
-	def displayCell(self, cell: QtWidgets.QLabel, cell_data: dict, scale=1, game_lost=False):
+		for row, col in zone:
+			cell = self.layout.itemAtPosition(row, col).widget()
+
+			self.displayCell(
+				cell,
+				self.minefield.field[row][col],
+				highlight=((row, col) in highlight),
+				scale=scale,
+				game_lost=game_lost
+			)
+
+		if (highlight):
+			self.highlighted_cells = highlight
+
+		if (pressed):
+			for row, col in pressed:
+				cell = self.layout.itemAtPosition(row, col).widget()
+				cell.setStyleSheet(
+					"background-color: lightgray;"
+					f"border-top: {str(4*scale)}px solid gray;"
+					f"border-left: {str(4*scale)}px solid gray;"
+					f"border-right: {str(2*scale)}px solid whitesmoke;"
+					f"border-bottom: {str(2*scale)}px solid whitesmoke;"
+				)
+
+
+
+	def displayCell(self, cell: QtWidgets.QLabel, cell_data: dict, highlight=False, scale=1, game_lost=False):
 		text = ""
 		background_color = ""
 		color = ""
@@ -173,6 +193,9 @@ class zweeper(QtWidgets.QWidget):
 				background_color = "lightgray"
 				color = "black"
 
+		if (highlight):
+			background_color = "palegoldenrod"
+
 		cell.setText(text)
 		cell.setStyleSheet(
 			f"background-color: {background_color};"
@@ -195,20 +218,77 @@ class zweeper(QtWidgets.QWidget):
 			cell.setCursor(QtCore.Qt.ArrowCursor)
 
 	def updateTitle(self):
-		self.setWindowTitle(f"zweeper - {self.minefield.mines - self.minefield.flags} flags left")
+		self.setWindowTitle(f"zweeper - {self.minefield.mines - self.minefield.flags} flags left - press K for keybinds")
+
 
 
 	def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-		self.updateUI()
+		self.updateUI(True)
 
 	def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
-		if event.key() == QtCore.Qt.Key_R:
-			self.minefield.initialize()
-			#while (self.minefield.field[0][0]["mines"] != 0 or self.minefield.isSolvableFrom(0, 0, restore=False)):
-			#	self.minefield.initialize()
-			self.updateUI()
-			self.updateTitle()
-			#print(self.minefield.seed)
+		match event.key():
+			case QtCore.Qt.Key_R:
+				self.minefield.initialize()
+				#while (self.minefield.field[0][0]["mines"] != 0 or self.minefield.isSolvableFrom(0, 0, restore=False)):
+				#	self.minefield.initialize()
+				self.updateUI(True)
+				self.updateTitle()
+				#print(self.minefield.seed)
+
+			case QtCore.Qt.Key_H:
+				hint = self.minefield.getHint()
+
+				if (hint):
+					hint_square = [cell["pos"] for cell in self.minefield.getNearbyCells(*hint["pos"], True)]
+					self.updateUI(zone=hint_square, highlight=hint_square)
+
+			case QtCore.Qt.Key_S:
+				try:
+					settings = QtCore.QSettings("zweeper", "zweeper")
+					settings.setValue("game", self.minefield.save())
+
+					showMessageBox("Game Saved", "Game saved successfully")
+				except:
+					showMessageBox("Error", "Failed to save game")
+
+			case QtCore.Qt.Key_L:
+				load = QtCore.QSettings("zweeper", "zweeper").value("game")
+				if (load):
+					try:
+						self.minefield = Minefield.load(load)
+						self.updateUI(True)
+						self.updateTitle()
+
+						showMessageBox("Game Loaded", "Game loaded successfully")
+					except:
+						showMessageBox("Error", "Failed to load game")
+				else:
+					showMessageBox("Error", "No saved game found")
+
+			case QtCore.Qt.Key_I:
+				msg = QMessageBox()
+
+				msg.setWindowTitle("Debug Info")
+				msg.setText(f"Seed: {self.minefield.seed}{self.minefield.seed}{self.minefield.seed}")
+
+				msg.setFixedWidth(200)
+				msg.exec()
+
+			case QtCore.Qt.Key_K:
+				msg = QMessageBox()
+
+				msg.setWindowTitle("Keybinds")
+				msg.setText(
+					"Left click: Open cell       \n"
+					"Right click: Flag cell\n"
+					"R: Restart game\n"
+					"H: Show hint\n"
+					"S: Save game\n"
+					"L: Load game\n"
+					"I: Show Debug Info\n"
+					"K: Show keybinds\n"
+				)
+				msg.exec()
 
 
 
@@ -216,18 +296,16 @@ class zweeper(QtWidgets.QWidget):
 		cellData = self.minefield.field[row][col]
 
 		if (event.button() == QtCore.Qt.LeftButton and not cellData["isOpen"] and not cellData["isFlag"]):
-			self.updateUI(pressed=self.layout.itemAtPosition(row, col).widget())
+			self.updateUI(pressed=[(row, col)])
 
 	def cellRelease(self, event: QtGui.QMouseEvent, row: int, col: int):
-		if (self.minefield.isOver()): return
-
 		cellData = self.minefield.field[row][col]
 
 		if (event.button() == QtCore.Qt.LeftButton and not cellData["isFlag"]):
 			if (self.minefield.isNew() and options["noGuessMode"]):
 				while (not self.minefield.isSolvableFrom(*cellData["pos"])):
 					self.minefield.initialize()
-				self.updateUI()
+				self.updateUI(True)
 
 			zone = self.minefield.open(*cellData["pos"], nearbyOpening=options["autoMode"], nearbyFlagging=options["autoMode"])
 			self.updateUI(zone=[cell["pos"] for cell in zone])
@@ -236,7 +314,7 @@ class zweeper(QtWidgets.QWidget):
 				self.updateUI(zone=[cell["pos"] for cell in self.minefield.flat if cell["isMine"] and not cell["isFlag"]])
 				self.onGameOver()
 				self.minefield.initialize()
-				self.updateUI()
+				self.updateUI(True)
 				self.updateTitle()
 
 		elif (event.button() == QtCore.Qt.RightButton):
@@ -247,8 +325,8 @@ class zweeper(QtWidgets.QWidget):
 					cellData["isFlag"] = True
 
 				self.updateUI(zone=[cellData["pos"]])
-				self.updateTitle()
 
+		self.updateTitle()
 		self.updateCursor(row, col)
 
 	def cellMouseMove(self, event: QtGui.QMouseEvent, row: int, col: int):
@@ -268,8 +346,6 @@ class zweeper(QtWidgets.QWidget):
 			msg.setText("You win!")
 		else:
 			msg.setText("You lose!")
-
-		msg.move(self.pos() + QtCore.QPoint(self.width()//2 - 50, self.height()//2))
 
 		msg.exec()
 
@@ -333,10 +409,12 @@ class zweeper_size_prompt(QtWidgets.QWidget):
 		self.minesLine.addWidget(self.minesInput)
 
 		self.autoModeCheckbox = QtWidgets.QCheckBox("Auto mode")
+		self.autoModeCheckbox.setChecked(True)
 		self.autoModeCheckbox.stateChanged.connect(lambda state: options.update({"autoMode": state == 2}))
 		self.layout.addWidget(self.autoModeCheckbox)
 
 		self.noGuessModeCheckbox = QtWidgets.QCheckBox("No guess mode")
+		self.noGuessModeCheckbox.setChecked(True)
 		self.noGuessModeCheckbox.stateChanged.connect(lambda state: options.update({"noGuessMode": state == 2}))
 		self.layout.addWidget(self.noGuessModeCheckbox)
 
